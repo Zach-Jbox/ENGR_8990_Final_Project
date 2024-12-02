@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.interpolate import RectBivariateSpline
+import plotly.graph_objects as go
 
 # Constants
 vehicle_mass = 2000  # kg
@@ -60,12 +61,6 @@ def calculate_battery_power(T_motor, omega_motor, T_generator, omega_generator):
     P_generator = T_generator * omega_generator
     return P_motor - P_generator
 
-def hamiltonian(T_engine, T_motor, T_generator, omega_engine, omega_motor, omega_generator, SOC, lambda_costate):
-    P_battery = calculate_battery_power(T_motor, omega_motor, T_generator, omega_generator)
-    dot_SOC = -P_battery / (Voc * Q_batt)
-    dot_mf = fuel_map_interp(omega_engine, T_engine)[0]
-    return dot_mf + lambda_costate * dot_SOC
-
 # Main loop
 lambda_costate = 0.1  # Example constant value for simplicity
 for i in range(1, len(time)):
@@ -86,14 +81,52 @@ for i in range(1, len(time)):
     SOC[i] = SOC[i - 1] + (-P_battery[i] / (Voc * Q_batt)) * dt
     fuel_consumption[i] = fuel_map_interp(omega_engine[i], T_engine[i])[0] * dt
 
-# Results visualization
-import matplotlib.pyplot as plt
-plt.figure(figsize=(10, 6))
-plt.plot(time, SOC, label='SOC')
-plt.plot(time, fuel_consumption.cumsum(), label='Cumulative Fuel Consumption')
-plt.xlabel('Time (s)')
-plt.ylabel('Values')
-plt.legend()
-plt.grid()
-plt.title('HEV Power-Split Results')
-plt.show()
+# Plot SOC
+fig_SOC = go.Figure()
+fig_SOC.add_trace(go.Scatter(x=time, y=SOC, mode='lines', name='SOC'))
+fig_SOC.update_layout(
+    title='State of Charge (SOC) Over Time',
+    xaxis_title='Time (s)',
+    yaxis_title='SOC',
+    template='plotly'
+)
+
+# Plot Cumulative Fuel Consumption
+fig_fuel = go.Figure()
+fig_fuel.add_trace(go.Scatter(x=time, y=fuel_consumption.cumsum(), mode='lines', name='Cumulative Fuel Consumption'))
+fig_fuel.update_layout(
+    title='Cumulative Fuel Consumption Over Time',
+    xaxis_title='Time (s)',
+    yaxis_title='Fuel Consumed (g)',
+    template='plotly'
+)
+
+# Plot Component Speeds
+fig_speeds = go.Figure()
+fig_speeds.add_trace(go.Scatter(x=time, y=omega_engine, mode='lines', name='Engine Speed (rad/s)', line=dict(color='green')))
+fig_speeds.add_trace(go.Scatter(x=time, y=omega_motor, mode='lines', name='Motor Speed (rad/s)', line=dict(color='orange')))
+fig_speeds.add_trace(go.Scatter(x=time, y=omega_generator, mode='lines', name='Generator Speed (rad/s)', line=dict(color='purple')))
+fig_speeds.update_layout(
+    title='Component Speeds Over Time',
+    xaxis_title='Time (s)',
+    yaxis_title='Speed (rad/s)',
+    template='plotly'
+)
+
+# Plot Component Torques
+fig_torques = go.Figure()
+fig_torques.add_trace(go.Scatter(x=time, y=T_engine, mode='lines', name='Engine Torque (Nm)', line=dict(color='green')))
+fig_torques.add_trace(go.Scatter(x=time, y=T_motor, mode='lines', name='Motor Torque (Nm)', line=dict(color='orange')))
+fig_torques.add_trace(go.Scatter(x=time, y=T_generator, mode='lines', name='Generator Torque (Nm)', line=dict(color='purple')))
+fig_torques.update_layout(
+    title='Component Torques Over Time',
+    xaxis_title='Time (s)',
+    yaxis_title='Torque (Nm)',
+    template='plotly'
+)
+
+# Show plots
+fig_SOC.show()
+fig_fuel.show()
+fig_speeds.show()
+fig_torques.show()
