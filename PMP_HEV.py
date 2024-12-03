@@ -23,8 +23,6 @@ R = 78  # ring gear
 K = 4.113  # final drive
 
 lambda_costate_init = 0.1  # Initial costate value
-max_torque = 75  # Nm
-gear_ratio = 3.0  # Example gear ratio for generator
 
 # Load the data
 txt_file_path = 'ftpcol.csv'
@@ -64,14 +62,12 @@ fuel_consumption_rate = total_fuel_consumption / total_time
 
 # Define functions
 def calculate_battery_power(Pm, SOC):
-    """Calculate battery power, voltage, and current."""
     Pbatt = Pm + Paux
     Vbatt = Voc - R_batt * (SOC * Q_batt)
     Ibatt = Pbatt / Vbatt
     return Pbatt, Vbatt, Ibatt
 
 def optimal_control(Tm, Wm, lambda_costate):
-    """Determine optimal control for torque split."""
     def cost(x):
         motor_power = Tm * x * Wm
         _, _, current = calculate_battery_power(motor_power, SOC_init)
@@ -81,7 +77,6 @@ def optimal_control(Tm, Wm, lambda_costate):
     return result.x
 
 def hamiltonian(fuel_rate, lambda_costate, SOC_dot):
-    """Calculate the Hamiltonian."""
     return fuel_rate + lambda_costate * SOC_dot
 
 def calculate_SOC_dot(Tm, Wm, Tg, Wg, SOC):
@@ -102,6 +97,7 @@ Hamiltonians = []
 Optimal_splits = []
 engine_powers = []
 motor_powers = []
+Pbatt_values = [] 
 
 # Iterate through each time step in the driving cycle
 for i in range(len(df_speed)):
@@ -120,7 +116,9 @@ for i in range(len(df_speed)):
     engine_powers.append(P_e)
     motor_powers.append(P_m)
 
-    # Calculate SOC_dot
+    # Calculate Pbatt and SOC_dot for the current step
+    Pbatt, _, _ = calculate_battery_power(P_m, SOC_values[-1])
+    Pbatt_values.append(Pbatt)  # Store Pbatt for each step
     SOC_dot = calculate_SOC_dot(Tm, Wm, Tg, Wg, SOC)
     SOC_dots.append(SOC_dot)
     
@@ -150,6 +148,7 @@ df_speed['Hamiltonian'] = Hamiltonians
 df_speed['Optimal_Split'] = Optimal_splits
 df_speed['Engine Power (W)'] = engine_powers
 df_speed['Motor Power (W)'] = motor_powers
+df_speed['Pbatt (W)'] = Pbatt_values
 
 # Calculate Power Split Percentage (using absolute values)
 total_engine_power = sum(abs(p) for p in engine_powers)  # Total absolute power from engine
@@ -209,7 +208,6 @@ fuel_consumption_plot.update_layout(
     yaxis_title="Fuel Consumed (g)"
 )
 
-
 # Battery usage plot
 battery_usage_plot = go.Figure()
 battery_usage_plot.add_trace(go.Scatter(x=df_speed.index, y=df_speed['SOC'], mode='lines', name='Battery State of Charge (SOC)'))
@@ -245,7 +243,6 @@ power_split_pie_chart = go.Figure(data=[go.Pie(
 power_split_pie_chart.update_layout(
     title="Power Split: Engine vs. Motor Contribution"
 )
-
 
 # Display all figures
 torques_plot.show()
