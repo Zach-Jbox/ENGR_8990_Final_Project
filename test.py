@@ -1,5 +1,7 @@
 import numpy as np
 import pandas as pd
+import h5py
+from scipy import interpolate
 from scipy.interpolate import RectBivariateSpline
 from scipy.optimize import minimize_scalar
 import plotly.graph_objects as go
@@ -28,9 +30,7 @@ gear_ratio = 3.0  # Example gear ratio for generator
 
 # Load the data
 txt_file_path = 'ftpcol.csv'
-txt_engine_path = 'HEV_output.csv'
 df_speed = pd.read_csv(txt_file_path)
-df_engine = pd.read_csv(txt_engine_path)
 
 # Speed and acceleration calculations
 mph_to_mps = 0.44704
@@ -49,18 +49,62 @@ X = df_speed['F_aero (N)'] + df_speed["F_grade (N)"] + df_speed["F_roll (N)"] + 
 df_speed['Fthrust (N)'] = np.maximum(X, 0)
 df_speed['Fbrake (N)'] = np.minimum(X, 0)
 
+# Load MATLAB data
+Data = h5py.File('PowertrainData.mat', 'r')
+
+# Extract engine data from MATLAB file
+We = np.array(Data['Engine/FuelMap/We'])  # Engine speed grid (rad/s)
+Te = np.array(Data['Engine/FuelMap/Te'])  # Engine torque grid (Nm)
+Fuel = np.array(Data['Engine/FuelMap/fuel'])  # Fuel consumption map
+
+# Create interpolating function for fuel consumption
+interp_fuel = RectBivariateSpline(We[:, 0], Te[0, :], Fuel)
+
+# Initialize lists to store results
+fuel_consumptions = []
+engine_torques = []  # For storing Te
+engine_speeds = []   # For storing We
+
+# Iterate through the driving cycle data
+for _, row in df_speed.iterrows():
+    speed = row['Speed (m/s)']  # Vehicle speed (m/s)
+    acceleration = row['Acceleration (m/s^2)']  # Vehicle acceleration (m/s^2)
+    
+    # Calculate required wheel torque
+    T_wheel = m * acceleration * reff  # Torque on the wheel
+    
+    # Back-calculate engine torque and speed
+    T_engine = T_wheel / K  # Engine torque
+    W_engine = speed * K / reff  # Engine speed
+    
+    # Clip values to prevent extrapolation beyond fuel map bounds
+    T_engine_clipped = np.clip(T_engine, Te.min(), Te.max())
+    W_engine_clipped = np.clip(W_engine, We.min(), We.max())
+    
+    # Interpolate fuel consumption using clipped engine torque and speed
+    fuel = interp_fuel(W_engine_clipped, T_engine_clipped)[0, 0]
+    
+    # Append results to the respective lists
+    fuel_consumptions.append(fuel)
+    engine_torques.append(T_engine_clipped)
+    engine_speeds.append(W_engine_clipped)
+
+# Add the calculated values to the dataframe
+df_speed['Te (Nm)'] = engine_torques
+df_speed['We (rad/s)'] = engine_speeds
+df_speed['FuelConsumption'] = fuel_consumptions
+
 # Torque and speed calculations
 df_speed['Tv (Nm)'] = ((reff / K) * (df_speed['F_inertia (N)'] + df_speed['F_aero (N)'] +
                                      df_speed['F_roll (N)'] + df_speed['F_grade (N)'] + df_speed['Fbrake (N)']))
-df_speed['Tm (Nm)'] = (df_speed['Tv (Nm)'] / K) - (df_engine['Te (Nm)'] / R) * S
-df_speed['Tg (Nm)'] = -df_engine['Te (Nm)'] * (S / (S + R))
+df_speed['Tm (Nm)'] = (df_speed['Tv (Nm)'] / K) - (df_speed['Te (Nm)'] / R) * S
+df_speed['Tg (Nm)'] = -df_speed['Te (Nm)'] * (S / (S + R))
 df_speed['Wm (rad/s)'] = (K / reff) * df_speed['Speed (m/s)']
-df_speed['Wg (rad/s)'] = (df_engine['We (rad/s)'] * (R + S) - df_speed['Wm (rad/s)'] * R) / S
+df_speed['Wg (rad/s)'] = (df_speed['We (rad/s)'] * (R + S) - df_speed['Wm (rad/s)'] * R) / S
 
-total_fuel_consumption = df_engine['FuelConsumption'].sum()
+total_fuel_consumption = df_speed['FuelConsumption'].sum()
 total_time = 1874
 fuel_consumption_rate = total_fuel_consumption / total_time
-
 
 # Define functions
 def calculate_battery_power(Pm, SOC):
@@ -103,16 +147,20 @@ Optimal_splits = []
 engine_powers = []
 motor_powers = []
 
-# Iterate through each time step in the driving cycle
+# Ensure 'Te (Nm)' and 'We (rad/s)' are added to df_speed correctly
+df_speed['Te (Nm)'] = engine_torques  # Rename or map engine torque values
+df_speed['We (rad/s)'] = engine_speeds  # Rename or map engine speed values
+
+# Re-run the loop with corrected column references
 for i in range(len(df_speed)):
     Tm = df_speed.loc[i, 'Tm (Nm)']  # Motor torque
     Wm = df_speed.loc[i, 'Wm (rad/s)']  # Motor speed
     Tg = df_speed.loc[i, 'Tg (Nm)']  # Generator torque
     Wg = df_speed.loc[i, 'Wg (rad/s)']  # Generator speed
-    Te = df_engine.loc[i, 'Te (Nm)']  # Engine torque
-    We = df_engine.loc[i, 'We (rad/s)']  # Engine speed
+    Te = df_speed.loc[i, 'Te (Nm)']  # Corrected engine torque column
+    We = df_speed.loc[i, 'We (rad/s)']  # Corrected engine speed column
     fuel_rate = fuel_consumption_rate  # Fuel consumption rate
-    
+
     # Engine and motor power calculations
     P_e = Te * We  # Engine power
     P_m = Tm * Wm  # Motor power
@@ -123,12 +171,12 @@ for i in range(len(df_speed)):
     # Calculate SOC_dot
     SOC_dot = calculate_SOC_dot(Tm, Wm, Tg, Wg, SOC)
     SOC_dots.append(SOC_dot)
-    
+
     # Calculate Hamiltonian
     H = hamiltonian(fuel_rate, lambda_costate, SOC_dot)
     Hamiltonians.append(H)
 
-    # Calculate optimal control torque split (if applicable)
+    # Calculate optimal control torque split
     if 'Tm (Nm)' in df_speed.columns and 'Wm (rad/s)' in df_speed.columns:
         optimal_split = optimal_control(Tm, Wm, lambda_costate)
     else:
@@ -139,8 +187,7 @@ for i in range(len(df_speed)):
     if i < len(df_speed) - 1:
         dt = 1  # Assuming time step is 1 second; adjust if you have a 'Time' column
         SOC += SOC_dot * dt
-        # Enforce SOC bounds
-        SOC = max(SOC_min, min(SOC, SOC_max))
+        SOC = max(SOC_min, min(SOC, SOC_max))  # Enforce SOC bounds
         SOC_values.append(SOC)
 
 # Add calculated data to DataFrame
@@ -166,7 +213,7 @@ else:
 
 # Torques plot
 torques_plot = go.Figure()
-torques_plot.add_trace(go.Scatter(x=df_speed.index, y=df_engine['Te (Nm)'], mode='lines', name='Engine Torque'))
+torques_plot.add_trace(go.Scatter(x=df_speed.index, y=df_speed['Te (Nm)'], mode='lines', name='Engine Torque'))
 torques_plot.add_trace(go.Scatter(x=df_speed.index, y=df_speed['Tm (Nm)'], mode='lines', name='Motor Torque'))
 torques_plot.add_trace(go.Scatter(x=df_speed.index, y=df_speed['Tg (Nm)'], mode='lines', name='Generator Torque'))
 torques_plot.update_layout(
@@ -177,7 +224,7 @@ torques_plot.update_layout(
 
 # Speeds plot
 speeds_plot = go.Figure()
-speeds_plot.add_trace(go.Scatter(x=df_speed.index, y=df_engine['We (rad/s)'], mode='lines', name='Engine Speed'))
+speeds_plot.add_trace(go.Scatter(x=df_speed.index, y=df_speed['We (rad/s)'], mode='lines', name='Engine Speed'))
 speeds_plot.add_trace(go.Scatter(x=df_speed.index, y=df_speed['Wm (rad/s)'], mode='lines', name='Motor Speed'))
 speeds_plot.add_trace(go.Scatter(x=df_speed.index, y=df_speed['Wg (rad/s)'], mode='lines', name='Generator Speed'))
 speeds_plot.update_layout(
@@ -199,7 +246,7 @@ soc_rate_of_change_plot.update_layout(
 fuel_consumption_plot = go.Figure()
 fuel_consumption_plot.add_trace(go.Scatter(
     x=df_speed.index,  # Using the index as the time steps
-    y=np.cumsum(df_engine['FuelConsumption']),  # Cumulative sum of fuel consumption
+    y=np.cumsum(df_speed['FuelConsumption']),  # Cumulative sum of fuel consumption
     mode='lines',
     name='Cumulative Fuel Consumption'
 ))
