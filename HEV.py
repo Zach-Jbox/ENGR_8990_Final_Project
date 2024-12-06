@@ -22,6 +22,7 @@ SOC_min, SOC_max = 0.2, 0.8  # SOC bounds
 S = 30  # sun gear
 R = 78  # ring gear
 K = 4.113  # final drive
+dSOC = 0
 
 # Load the data
 ftpcol = 'ftpcol.csv'
@@ -180,31 +181,187 @@ df_results = pd.DataFrame({
 # Filter out rows with None or NaN values
 df_results.dropna(inplace=True)
 
-# Initialize lists for coefficients
+# Initialize lists for coefficients and calculated values
 a_values = []
-b_values = []# Iterate over each Pveh in df_speed
-Pbatt_array = []
+b_values = []
+Tg_values = []
+Tm_values = []
+Wg_values = []
+Wm_values = []
+Pbatt_values = []
+Teng_values = []
+Weng_values = []
+Peng_values = []  # New list to store Peng values
+fuel_rate_values = []  # List to store fuel rate in g/s
 
-for Pveh in df_speed['P_veh (kW)']:
-    # Compute Pbatt for the current Pveh
-    Pbatt_array = Pveh - Peng_array
+# Iterate over each Pveh in df_speed
+for idx, Pveh in enumerate(df_speed['P_veh (kW)']):
+    # Proceed with calculations for each Pveh
+    Pbatt_array = np.zeros(np.shape(Peng_array))
+    best_Tg, best_Tm, best_Wg, best_Wm, best_Pbatt, best_Teng, best_Weng, best_Peng, best_fuel_rate = None, None, None, None, None, None, None, None, None
+    min_error = float('inf')  # Track minimum error between Pveh and (Pbatt + Peng)
+
+    # Iterate through possible Peng values
+    for i, Peng in enumerate(Peng_array):
+        # Find corresponding Teng and Weng from df_results for the selected Peng
+        result_row = df_results[df_results['Peng (kW)'] == Peng]
+        if not result_row.empty:
+            Teng = result_row['Best Te (Nm)'].values[0]
+            Weng = result_row['Best We (rad/s)'].values[0]
+
+            # Calculate generator torque (Tg) and speed (Wg) based on HW1 Solution
+            Tg = -Teng * (S / (S + R))
+            Tm = -Teng * (R / (S + R)) + df_speed['Fthrust (N)'].iloc[idx] * reff / K
+            Wm = K / reff * df_speed['Speed (m/s)'].iloc[idx]
+            Wg = (Weng * (R + S) - Wm * R) / S
+
+            # Efficiency calculations
+            eta = 0.85
+            etam = 1 / eta if Tm * Wm >= 0 else eta
+            etag = 1 / eta if Tg * Wg >= 0 else eta
+
+            # Calculate battery power (Pbatt)
+            Pbatt = etam * Tm * Wm + etag * Tg * Wg
+            Pbatt_array[i] = Pbatt
+
+            # Calculate the error between Pveh and (Pbatt + Peng)
+            total_power = Pbatt + Peng
+            error = abs(Pveh - total_power)
+
+            # Update the best values if this combination yields a smaller error
+            if error < min_error:
+                min_error = error
+                best_Tg, best_Tm, best_Wg, best_Wm, best_Pbatt, best_Teng, best_Weng, best_Peng = Tg, Tm, Wg, Wm, Pbatt, Teng, Weng, Peng
+
+                # Calculate the fuel rate (g/s)
+                fuel_rate = None
+                if best_Teng is not None and best_Weng is not None:
+                    # Interpolate the fuel map for the given engine speed and torque
+                    fuel_interp = RegularGridInterpolator((enginemap_spd, enginemap_trq), enginemap_gpkWh, method='linear')
+                    fuel_consumption_gpkWh = fuel_interp((best_Weng, best_Teng))
+
+                    # Convert fuel consumption to g/s
+                    fuel_rate = (fuel_consumption_gpkWh * best_Peng * 1000) / 3600
+
+                best_fuel_rate = fuel_rate
+
+    # Append the final calculated values for this Pveh
+    Tg_values.append(best_Tg)
+    Tm_values.append(best_Tm)
+    Wg_values.append(best_Wg)
+    Wm_values.append(best_Wm)
+    Pbatt_values.append(best_Pbatt)
+    Teng_values.append(best_Teng)
+    Weng_values.append(best_Weng)
+    Peng_values.append(best_Peng)
+    fuel_rate_values.append(best_fuel_rate)
 
     # Perform linear regression if valid points exist
-    slope, intercept, _, _, _ = linregress(Pbatt_array, min_fuel_rates)
+    if not np.isnan(Pbatt_array).any() and len(min_fuel_rates) > 0:
+        slope, intercept, _, _, _ = linregress(Pbatt_array, min_fuel_rates)
+        a_values.append(slope)
+        b_values.append(intercept)
 
-    # Append slope and intercept to lists
-    a_values.append(slope)
-    b_values.append(intercept)
-    
 # Convert results to numpy arrays
-a_values = np.array(a_values).reshape(-1, 1)
-b_values = np.array(b_values).reshape(-1, 1)
+a_values = np.array(a_values).reshape(-1)
+b_values = np.array(b_values).reshape(-1)
+Tg_values = np.array(Tg_values).reshape(-1)
+Tm_values = np.array(Tm_values).reshape(-1)
+Wg_values = np.array(Wg_values).reshape(-1)
+Wm_values = np.array(Wm_values).reshape(-1)
+Pbatt_values = np.array(Pbatt_values).reshape(-1)
+Teng_values = np.array(Teng_values).reshape(-1)
+Weng_values = np.array(Weng_values).reshape(-1)
+Peng_values = np.array(Peng_values).reshape(-1)  # Convert Peng values to numpy array
+fuel_rate_values = np.array(fuel_rate_values).reshape(-1)
 
 # Add to df_speed
 df_speed['a'] = a_values
 df_speed['b'] = b_values
+df_speed['Tg (Nm)'] = Tg_values
+df_speed['Tm (Nm)'] = Tm_values
+df_speed['Wg (rad/s)'] = Wg_values
+df_speed['Wm (rad/s)'] = Wm_values
+df_speed['Pbatt (kW)'] = Pbatt_values
+df_speed['Teng (Nm)'] = Teng_values
+df_speed['Weng (rad/s)'] = Weng_values
+df_speed['Peng (kW)'] = Peng_values
+df_speed['Fuel Rate (g/s)'] = fuel_rate_values  # Add fuel rate values to df_speed
 
-print(f"Shape of a_values: {Pbatt_array.shape}")
+# Time bounds
+t0 = 0
+tf = 1875  # Replace with the actual final time in seconds or as per your data
+dt = 1  # Step size (time interval)
 
+# Compute the summation term from t0 to (tf - dt)
+summation_result = 0
+time_values = np.arange(t0, tf, dt)  # Create time values from t0 to tf with step size dt
+
+for t in time_values:
+    summation_result += 1 / a_values
+
+# Take the inverse of the summation result
+summation_inverse = 1 / summation_result
+
+# Compute the remaining terms
+tf_t0_ratio = (tf - t0) / dt
+voc_term = (Voc / (2 * Q_batt * R_batt))
+
+# Calculate the multiplicative expression
+multiplicative_expression = tf_t0_ratio * voc_term - dSOC
+
+# Compute lambda
+lambda_value = (2 * Q_batt**2 * R_batt) * summation_inverse * multiplicative_expression
+
+df_speed['lambda'] = lambda_value
+
+df_speed['SOC_dot'] = - (Voc - np.sqrt(Voc**2 - 4 * R_batt * df_speed['Pbatt (kW)'] * 1000)) / (2 * Q_batt * R_batt)
+
+# Initialize lists for storing optimal power split values and Hamiltonian values
+optimal_Peng = []
+optimal_Pbatt = []
+hamiltonian_values = []
+
+# Iterate over each row in df_speed to determine the power split
+for idx in range(len(df_speed)):
+    P_veh = df_speed['P_veh (kW)'].iloc[idx]  # Power required by vehicle
+    lambda_value = df_speed['lambda'].iloc[idx]  # Costate variable at the current time step
+    a = df_speed['a'].iloc[idx]  # Coefficient from linear regression
+    b = df_speed['b'].iloc[idx]  # Intercept from linear regression
+    SOC_dot = df_speed['SOC_dot'].iloc[idx]  # SOC rate of change
+
+    # Define range of potential engine power (from 0 to P_veh in steps of 1 kW)
+    possible_Peng = np.arange(0, P_veh + 1, 1)  # Possible engine power values in kW
+
+    # Track the minimum Hamiltonian and corresponding power split
+    min_Hamiltonian = float('inf')
+    best_Peng = 0
+    best_Pbatt = 0
+
+    # Iterate through each possible value of engine power
+    for Peng in possible_Peng:
+        Pbatt = P_veh - Peng  # Battery power is whatever remains after engine power
+
+        # Calculate Hamiltonian for the current Peng and Pbatt
+        Hamiltonian = (a * Pbatt + b) + (lambda_value * SOC_dot)
+
+        # Check if this Hamiltonian is the minimum found so far
+        if Hamiltonian < min_Hamiltonian:
+            min_Hamiltonian = Hamiltonian
+            best_Peng = Peng
+            best_Pbatt = Pbatt
+
+    # Store the optimal power split and Hamiltonian value
+    optimal_Peng.append(best_Peng)
+    optimal_Pbatt.append(best_Pbatt)
+    hamiltonian_values.append(min_Hamiltonian)
+
+# Add optimal power split and Hamiltonian values to df_speed
+df_speed['P_eng (kW)'] = optimal_Peng
+df_speed['P_batt (kW)'] = optimal_Pbatt
+df_speed['Hamiltonian'] = hamiltonian_values
+
+# Save selected columns to CSV
+df_speed[['a', 'b', 'lambda', 'SOC_dot', 'Hamiltonian']].to_csv('a_b_lambda_values.csv', index=False)
 
 
