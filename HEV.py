@@ -180,41 +180,31 @@ df_results = pd.DataFrame({
 # Filter out rows with None or NaN values
 df_results.dropna(inplace=True)
 
-# Initialize arrays to store coefficients a and b for each row in df_speed
+# Initialize lists for coefficients
 a_values = []
-b_values = []
+b_values = []# Iterate over each Pveh in df_speed
+Pbatt_array = []
 
-# Iterate over each value in Pveh_FTP_75 (df_speed['P_veh (kW)'])
 for Pveh in df_speed['P_veh (kW)']:
+    # Compute Pbatt for the current Pveh
+    Pbatt_array = Pveh - Peng_array
+
+    # Perform linear regression if valid points exist
+    slope, intercept, _, _, _ = linregress(Pbatt_array, min_fuel_rates)
+
+    # Append slope and intercept to lists
+    a_values.append(slope)
+    b_values.append(intercept)
     
-    # Initialize lists to accumulate valid data points for Pbatt and fuel rates
-    valid_Pbatt = []
-    valid_fuel_rates = []
+# Convert results to numpy arrays
+a_values = np.array(a_values).reshape(-1, 1)
+b_values = np.array(b_values).reshape(-1, 1)
 
-    # Iterate over each value of Peng in df_results to calculate Pbatt and find corresponding fuel rates
-    for Peng, fuel_rate in zip(df_results['Peng (kW)'], df_results['Min Fuel Rate (g/s)']):
-        
-        # Calculate Pbatt
-        Pbatt = Pveh - Peng
-        
-        # Only consider valid (positive, non-NaN) values
-        if Pbatt > 0 and not np.isnan(fuel_rate):
-            valid_Pbatt.append(Pbatt)
-            valid_fuel_rates.append(fuel_rate)
-
-    # Perform linear regression if there are enough valid data points
-    if len(valid_Pbatt) > 1:
-        slope, intercept, _, _, _ = linregress(valid_Pbatt, valid_fuel_rates)
-        a_values.append(slope)
-        b_values.append(intercept)
-    else:
-        # Append NaN if regression could not be performed
-        a_values.append(np.nan)
-        b_values.append(np.nan)
-
-# Add coefficients to the DataFrame df_speed
+# Add to df_speed
 df_speed['a'] = a_values
 df_speed['b'] = b_values
 
-# Print the updated DataFrame
-print(df_speed)
+print(f"Shape of a_values: {Pbatt_array.shape}")
+
+
+
