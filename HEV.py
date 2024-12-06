@@ -1,8 +1,10 @@
 import numpy as np
 import pandas as pd
 from scipy.interpolate import interp1d, interp2d
+from scipy.interpolate import RegularGridInterpolator
 from scipy.stats import linregress
 import plotly.graph_objects as go
+
 
 # Constants
 m = 2000  # kg
@@ -24,8 +26,6 @@ K = 4.113  # final drive
 # Load the data
 ftpcol = 'ftpcol.csv'
 df_speed = pd.read_csv(ftpcol)
-engine_parameters = 'HEVPowerSplitData.csv'
-df_engine = pd.read_csv(engine_parameters)
 
 # Speed and acceleration calculations
 mph_to_mps = 0.44704
@@ -44,25 +44,14 @@ X = df_speed['F_aero (N)'] + df_speed["F_grade (N)"] + df_speed["F_roll (N)"] + 
 df_speed['Fthrust (N)'] = np.maximum(X, 0)
 df_speed['Fbrake (N)'] = np.minimum(X, 0)
 
-# Torque and speed calculations
-df_speed['Tv (Nm)'] = ((reff / K) * (df_speed['F_inertia (N)'] + df_speed['F_aero (N)'] +
-                                     df_speed['F_roll (N)'] + df_speed['F_grade (N)'] + df_speed['Fbrake (N)']))
-df_speed['Tm (Nm)'] = (df_speed['Tv (Nm)'] / K) - (df_engine['Te (Nm)'] / R) * S
-df_speed['Tg (Nm)'] = -df_engine['Te (Nm)'] * (S / (S + R))
-df_speed['Wm (rad/s)'] = (K / reff) * df_speed['Speed (m/s)']
-df_speed['Wg (rad/s)'] = (df_engine['We (rad/s)'] * (R + S) - df_speed['Wm (rad/s)'] * R) / S
+# Calculate power required by the vehicle (P_veh) in Watts
+df_speed['P_veh (W)'] = df_speed['Fthrust (N)'] * df_speed['Speed (m/s)']
 
-eta = 0.85
-etam = np.full_like(df_speed['Tg (Nm)'], eta)
-etag = np.full_like(df_speed['Tg (Nm)'], eta)
-etam[(df_speed['Tm (Nm)'] * df_speed['Wm (rad/s)']) >= 0] = 1 / eta
-etag[(df_speed['Tg (Nm)'] * df_speed['Wg (rad/s)']) >= 0] = 1 / eta
+# Convert power from Watts to kilowatts
+df_speed['P_veh (kW)'] = df_speed['P_veh (W)'] / 1000
 
-Pveh = 20.3*1000
-df_speed['Pbatt (W)'] = (etam * df_speed['Tm (Nm)'] * df_speed['Wm (rad/s)'] + etag * df_speed['Tg (Nm)'] * df_speed['Wg (rad/s)'])
-df_speed['Peng (W)'] = Pveh - df_speed['Pbatt (W)']
-
-df_speed['SOC'] = -((Voc - np.sqrt(Voc**2 - 4 * R_batt * df_speed['Pbatt (W)'])) / (2 * R_batt * Q_batt))
+# Set power to zero where speed is zero to avoid NaN values during idle times
+df_speed.loc[df_speed['Speed (m/s)'] == 0, 'P_veh (kW)'] = 0
 
 # Engine fuel map data
 enginemap_spd = np.array([1000, 1250, 1500, 1750, 2000, 2250, 2500, 2750, 3000, 3250, 3500, 4000]) * 2 * np.pi / 60
@@ -99,124 +88,133 @@ MaxSp_pt = np.array([1000, 1010, 1250, 1500, 1750, 2000, 2250, 2500, 2750, 3000,
 fine_spd = np.linspace(enginemap_spd.min(), enginemap_spd.max(), 100)  # Fine grid for engine speed
 fine_trq = np.linspace(enginemap_trq.min(), enginemap_trq.max(), 100)  # Fine grid for torque
 
+# Create a 2D grid for fine-gridded torque and speed
+fine_T, fine_W = np.meshgrid(fine_trq, fine_spd)
+
+# Compute the engine power (in kW) for the fine grid
+fine_eng_power = (fine_T * fine_W) / 1000  # Convert W to kW
+
 # Interpolate the fuel map to the finer grid
-from scipy.interpolate import interp2d
-interp_func = interp2d(enginemap_trq, enginemap_spd, enginemap, kind='linear')  # Interpolation function
-fine_fuel_map = interp_func(fine_trq, fine_spd)  # Interpolated data
+interp_func = RegularGridInterpolator((enginemap_spd, enginemap_trq), enginemap, method='linear')
+fine_points = np.array(np.meshgrid(fine_spd, fine_trq)).T.reshape(-1, 2)
+fine_fuel_map = interp_func(fine_points).reshape(100, 100)  # Interpolated data reshaped to (100, 100)
+delta_Peng = 1 #kW
 
 # Resample max torque line
 MaxSp = np.linspace(1000, 4000, 300)  # 1 RPM step
 MaxTq = interp1d(MaxSp_pt, MaxTq_pt, kind='linear')(MaxSp)
 MaxSp_radsec = MaxSp * 2 * np.pi / 60  # Convert to rad/s
 
-radsec2rpm = 60 / (2 * np.pi)
 
-# Extract 10 equally spaced points
-num_points = 10
-selected_speeds = np.linspace(MaxSp.min(), MaxSp.max(), num_points)  # Speeds in RPM
-selected_torques = interp1d(MaxSp, MaxTq, kind='linear')(selected_speeds)
-selected_speeds_radsec = selected_speeds * (2 * np.pi / 60)  # Convert to rad/s
+delta_Peng = 1  # kW increment
 
-# Fuel consumption interpolation with realistic scaling
-interp_fuel_func = interp2d(enginemap_trq, enginemap_spd, fuel_map_gps, kind='linear')
-results = []
-for speed_radsec, torque in zip(selected_speeds_radsec, selected_torques):
-    fuel_rate = interp_fuel_func(torque, speed_radsec) / 1000  # Scale down by 1000 for realistic units
-    results.append((speed_radsec, torque, float(fuel_rate)))
+# Initialize an array to hold valid Peng values
+valid_peng_values = []
 
-# Create DataFrame for results
-df_results = pd.DataFrame(results, columns=["Speed (rad/s)", "Torque (Nm)", "Fuel Rate (g/s)"])
-print(df_results)
+# Iterate through each engine speed (We) in the fine grid
+for we in fine_spd:  # fine_spd is already in rad/s
+    # Find the corresponding maximum torque for the current speed
+    max_torque = interp1d(MaxSp_radsec, MaxTq, kind='linear', bounds_error=False, fill_value="extrapolate")(we)
+    
+    # Iterate over each torque value in the fine grid
+    for torque in fine_trq:
+        # Check if torque is within the max torque constraint
+        if torque <= max_torque:
+            # Calculate Peng for valid torque values
+            peng = (we * torque) / 1000  # Convert from W to kW
+            valid_peng_values.append(peng)
 
-# Create the contour plot
-fig = go.Figure()
+# Convert valid Peng values to a sorted numpy array
+valid_peng_values = np.array(valid_peng_values)
+valid_peng_values.sort()
 
-# Add contour lines for the fuel map
-fig.add_trace(go.Contour(
-    z=fine_fuel_map,
-    x=fine_spd * radsec2rpm,  # Convert back to RPM
-    y=fine_trq,  # Torque
-    colorscale='Viridis',
-    colorbar=dict(title="Fuel Consumption (g/s)"),
-    contours=dict(
-        coloring="lines",  # Show only boundary lines
-        showlabels=True,  # Show labels on lines
-        labelfont=dict(size=10, color="black")
-    )
-))
+# Create array from Peng_min to Peng_max with delta_Peng increments
+Peng_min = valid_peng_values.min()
+Peng_max = valid_peng_values.max()
+Peng_array = np.arange(Peng_min, Peng_max + delta_Peng, delta_Peng)
 
-# Add the maximum torque line
-fig.add_trace(go.Scatter(
-    x=MaxSp,  # Maximum engine speed in RPM
-    y=MaxTq,  # Maximum torque
-    mode='lines',
-    line=dict(color='red', width=2),
-    name='Max Torque Line'
-))
+# Find minimum fuel consumption for each Peng in Peng_array
+min_fuel_rates = []
+best_torque_values = []
+best_speed_values = []
 
-fig.add_trace(go.Scatter(
-    x=selected_speeds,
-    y=selected_torques,
-    mode='markers',
-    marker=dict(color='red', size=8),
-    name='Selected Points'
-))
+# Iterate through Peng values in Peng_array
+for Peng_target in Peng_array:
+    # Initialize a list to store fuel consumption rates for matching Peng
+    fuel_rates = []
+    torque_values = []
+    speed_values = []
 
-# Layout adjustments
-fig.update_layout(
-    title="Engine Fuel Map with Full Background",
-    xaxis=dict(title="We (RPM)", range=[1000, 4000]),
-    yaxis=dict(title="Te (Nm)", range=[10, 105]),
-    template="plotly_white"
-)
+    # Iterate through the fine grid and find points matching Peng_target
+    for i in range(fine_W.shape[0]):
+        for j in range(fine_W.shape[1]):
+            # Calculate Peng at the current point
+            Peng_actual = fine_eng_power[i, j]
 
-fig.show()
+            # Check if Peng_actual is close to Peng_target
+            if np.isclose(Peng_actual, Peng_target, atol=0.5):
+                # Append the corresponding fuel rate, torque, and speed
+                fuel_rates.append(fine_fuel_map[i, j])
+                torque_values.append(fine_T[i, j])
+                speed_values.append(fine_W[i, j])
 
-# Constants
-Pveh = 20.3 * 1000  # Vehicle power in W
+    # If any valid fuel rates are found, add the minimum to min_fuel_rates and corresponding torque and speed
+    if fuel_rates:
+        min_fuel_idx = np.argmin(fuel_rates)
+        min_fuel_rates.append(fuel_rates[min_fuel_idx])
+        best_torque_values.append(torque_values[min_fuel_idx])
+        best_speed_values.append(speed_values[min_fuel_idx])
+    else:
+        min_fuel_rates.append(None)
+        best_torque_values.append(None)
+        best_speed_values.append(None)
 
-# Calculate Peng and Pbatt for each point and add them as new columns
-df_results["Peng (W)"] = df_results["Torque (Nm)"] * df_results["Speed (rad/s)"]  # Peng in W
-df_results["Pbatt (W)"] = Pveh - df_results["Peng (W)"]  # Pbatt in W
-df_results['Pbatt (kW)'] = df_results['Pbatt (W)'] / 1000
-df_results['Peng (kW)'] = df_results['Peng (W)'] / 1000
+# Create DataFrame to show the results and filter out None or NaN values
+df_results = pd.DataFrame({
+    "Peng (kW)": Peng_array,
+    "Min Fuel Rate (g/s)": min_fuel_rates,
+    "Best Te (Nm)": best_torque_values,
+    "Best We (rad/s)": best_speed_values
+})
 
-# Create the scatter plot
-minf_Vs_Pbatt = go.Figure()
+# Filter out rows with None or NaN values
+df_results.dropna(inplace=True)
 
-minf_Vs_Pbatt.add_trace(go.Scatter(
-    x=df_results['Pbatt (kW)'],  # Pbatt in kW as x-axis
-    y=df_results['Fuel Rate (g/s)'],  # Fuel rate as y-axis
-    mode='markers+lines',  # Markers and lines
-    marker=dict(color='blue', size=8),
-    line=dict(color='blue'),
-    name='Fuel Rate vs Pbatt'
-))
+# Initialize arrays to store coefficients a and b for each row in df_speed
+a_values = []
+b_values = []
 
-# Update layout
-minf_Vs_Pbatt.update_layout(
-    title="Minimum Fuel Rate vs Battery Power",
-    xaxis=dict(title="Pbatt (kW)"),
-    yaxis=dict(title="Fuel Rate (g/s)"),
-    template="plotly_white"
-)
+# Iterate over each value in Pveh_FTP_75 (df_speed['P_veh (kW)'])
+for Pveh in df_speed['P_veh (kW)']:
+    
+    # Initialize lists to accumulate valid data points for Pbatt and fuel rates
+    valid_Pbatt = []
+    valid_fuel_rates = []
 
-# Show the plot
-minf_Vs_Pbatt.show()
+    # Iterate over each value of Peng in df_results to calculate Pbatt and find corresponding fuel rates
+    for Peng, fuel_rate in zip(df_results['Peng (kW)'], df_results['Min Fuel Rate (g/s)']):
+        
+        # Calculate Pbatt
+        Pbatt = Pveh - Peng
+        
+        # Only consider valid (positive, non-NaN) values
+        if Pbatt > 0 and not np.isnan(fuel_rate):
+            valid_Pbatt.append(Pbatt)
+            valid_fuel_rates.append(fuel_rate)
 
-# Assuming df_results contains the data with columns "Pbatt (kW)" and "Fuel Rate (g/s)"
-x = df_results['Pbatt (kW)']  # Battery power in kW (x-axis)
-y = df_results['Fuel Rate (g/s)']  # Minimum fuel rate in g/s (y-axis)
+    # Perform linear regression if there are enough valid data points
+    if len(valid_Pbatt) > 1:
+        slope, intercept, _, _, _ = linregress(valid_Pbatt, valid_fuel_rates)
+        a_values.append(slope)
+        b_values.append(intercept)
+    else:
+        # Append NaN if regression could not be performed
+        a_values.append(np.nan)
+        b_values.append(np.nan)
 
-# Perform linear regression
-slope, intercept, r_value, p_value, std_err = linregress(x, y)
+# Add coefficients to the DataFrame df_speed
+df_speed['a'] = a_values
+df_speed['b'] = b_values
 
-# Print the results
-print(f"Slope (a): {slope:.4f}")  # a = slope
-print(f"Intercept (b): {intercept:.4f}")  # b = intercept
-
-# Compute the total summation (Delta SOC)
-delta_SOC = df_speed['SOC'].sum()
-
-# Display the result
-print(f"Delta SOC: {delta_SOC}")
+# Print the updated DataFrame
+print(df_speed)
