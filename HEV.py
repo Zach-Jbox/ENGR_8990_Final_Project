@@ -15,7 +15,7 @@ f = 0.015
 g = 9.8  # m/s^2
 reff = 0.3  # m
 Voc = 201.6  # Battery open circuit voltage (V)
-Q_batt = 6.5 * 3600  # Battery capacity (As)
+Q_batt = 6.5  # Battery capacity (As)
 R_batt = 0.504  # Battery Resistance
 SOC_init = 0.8  # Initial state of charge
 SOC_min, SOC_max = 0.2, 0.8  # SOC bounds
@@ -45,11 +45,8 @@ X = df_speed['F_aero (N)'] + df_speed["F_grade (N)"] + df_speed["F_roll (N)"] + 
 df_speed['Fthrust (N)'] = np.maximum(X, 0)
 df_speed['Fbrake (N)'] = np.minimum(X, 0)
 
-# Calculate power required by the vehicle (P_veh) in Watts
-df_speed['P_veh (W)'] = df_speed['Fthrust (N)'] * df_speed['Speed (m/s)']
-
-# Convert power from Watts to kilowatts
-df_speed['P_veh (kW)'] = df_speed['P_veh (W)'] / 1000
+# Calculate power required by the vehicle (P_veh) in kilo Watts
+df_speed['P_veh (kW)'] = (df_speed['Fthrust (N)'] * df_speed['Speed (m/s)']) / 1000
 
 # Set power to zero where speed is zero to avoid NaN values during idle times
 df_speed.loc[df_speed['Speed (m/s)'] == 0, 'P_veh (kW)'] = 0
@@ -329,48 +326,46 @@ df_speed['SOC_dot'] = - (Voc - np.sqrt(sqrt_term)) / (2 * Q_batt * R_batt)
 df_speed['SOC_dot'] = df_speed['SOC_dot'].fillna(0)
 
 # Initialize lists for storing optimal power split values and Hamiltonian values
-optimal_Peng = []
-optimal_Pbatt = []
-hamiltonian_values = []
 
 # Iterate over each row in df_speed to determine the power split
 for idx in range(len(df_speed)):
     P_veh = df_speed['P_veh (kW)'].iloc[idx]  # Power required by vehicle
+    Peng = df_speed['Peng (kW)'].iloc[idx]  # Power required by engine
     lambda_value = df_speed['lambda'].iloc[idx]  # Costate variable at the current time step
     a = df_speed['a'].iloc[idx]  # Coefficient from linear regression
     b = df_speed['b'].iloc[idx]  # Intercept from linear regression
     SOC_dot = df_speed['SOC_dot'].iloc[idx]  # SOC rate of change
+    
+    Pbatt = P_veh - Peng
 
-    # Define range of potential engine power (from 0 to P_veh in steps of 1 kW)
-    possible_Peng = np.arange(0, P_veh + 1, 1)  # Possible engine power values in kW
-
-    # Track the minimum Hamiltonian and corresponding power split
-    min_Hamiltonian = float('inf')
-    best_Peng = 0
-    best_Pbatt = 0
-
-    # Iterate through each possible value of engine power
-    for Peng in possible_Peng:
-        Pbatt = P_veh - Peng  # Battery power is whatever remains after engine power
-
-        # Calculate Hamiltonian for the current Peng and Pbatt
-        Hamiltonian = (a * Pbatt + b) + (lambda_value * SOC_dot)
-
-        # Check if this Hamiltonian is the minimum found so far
-        if Hamiltonian < min_Hamiltonian:
-            min_Hamiltonian = Hamiltonian
-            best_Peng = Peng
-            best_Pbatt = Pbatt
-
-    # Store the optimal power split and Hamiltonian value
-    optimal_Peng.append(best_Peng)
-    optimal_Pbatt.append(best_Pbatt)
-    hamiltonian_values.append(min_Hamiltonian)
+    # Calculate Hamiltonian for the current Peng and Pbatt
+    Hamiltonian = (a * Pbatt + b) + (lambda_value * SOC_dot)
 
 # Add optimal power split and Hamiltonian values to df_speed
-df_speed['P_eng (kW)'] = optimal_Peng
-df_speed['P_batt (kW)'] = optimal_Pbatt
-df_speed['Hamiltonian'] = hamiltonian_values
+df_speed['Hamiltonian'] = Hamiltonian
+df_speed['Pbatt (kW)'] = Pbatt
+
 
 # Save selected columns to CSV
-df_speed[['a', 'b', 'lambda', 'SOC_dot', 'Hamiltonian']].to_csv('a_b_lambda_values.csv', index=False)
+df_speed[['Peng (kW)', 'Pbatt (kW)', 'P_veh (kW)']].to_csv('specific_values.csv', index=False)
+
+# Calculate total engine power, battery power, and vehicle power
+total_Peng = df_speed['Peng (kW)'].sum()
+total_Pbatt = df_speed['Pbatt (kW)'].sum()
+total_Pveh = df_speed['P_veh (kW)'].sum()
+
+# Calculate overall percentage contributions
+overall_eng_percent = (total_Peng / total_Pveh) * 100 if total_Pveh > 0 else 0
+overall_batt_percent = (total_Pbatt / total_Pveh) * 100 if total_Pveh > 0 else 0
+
+# Print results
+print(f"Overall Engine Power Contribution: {overall_eng_percent:.2f}%")
+print(f"Overall Battery Power Contribution: {overall_batt_percent:.2f}%")
+
+# Optionally, save the results to a file
+overall_results = pd.DataFrame({
+    'Metric': ['Engine Contribution (%)', 'Battery Contribution (%)'],
+    'Value': [overall_eng_percent, overall_batt_percent]
+})
+
+print(overall_results)
