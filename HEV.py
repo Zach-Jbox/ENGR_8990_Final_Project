@@ -315,7 +315,18 @@ lambda_value = (2 * Q_batt**2 * R_batt) * summation_inverse * multiplicative_exp
 
 df_speed['lambda'] = lambda_value
 
-df_speed['SOC_dot'] = - (Voc - np.sqrt(Voc**2 - 4 * R_batt * df_speed['Pbatt (kW)'] * 1000)) / (2 * Q_batt * R_batt)
+Pbatt_watts = df_speed['Pbatt (kW)'] * 1000  # Convert Pbatt from kW to W
+
+sqrt_term = Voc**2 - 4 * R_batt * Pbatt_watts
+
+# Ensure the square root term is non-negative
+sqrt_term[sqrt_term < 0] = 0  # Replace negative values with 0
+
+# Calculate SOC_dot
+df_speed['SOC_dot'] = - (Voc - np.sqrt(sqrt_term)) / (2 * Q_batt * R_batt)
+
+# Replace NaN or invalid SOC_dot values with zero
+df_speed['SOC_dot'] = df_speed['SOC_dot'].fillna(0)
 
 # Initialize lists for storing optimal power split values and Hamiltonian values
 optimal_Peng = []
@@ -363,5 +374,3 @@ df_speed['Hamiltonian'] = hamiltonian_values
 
 # Save selected columns to CSV
 df_speed[['a', 'b', 'lambda', 'SOC_dot', 'Hamiltonian']].to_csv('a_b_lambda_values.csv', index=False)
-
-
