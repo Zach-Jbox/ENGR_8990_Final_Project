@@ -286,36 +286,6 @@ df_speed['Fuel Rate (g/s)'] = fuel_rate_values  # Add fuel rate values to df_spe
 # Save selected columns to CSV
 df_speed[['Peng (kW)', 'Pbatt (kW)', 'P_veh (kW)']].to_csv('specific_values.csv', index=False)
 
-'''
-# Calculate total engine power, battery power, and vehicle power
-total_Peng = df_speed['Peng (kW)'].sum()
-total_Pbatt = df_speed['Pbatt (kW)'].sum()
-total_Pveh = df_speed['P_veh (kW)'].sum()
-
-# Calculate overall percentage contributions
-overall_eng_percent = (total_Peng / total_Pveh) * 100 if total_Pveh > 0 else 0
-overall_batt_percent = (total_Pbatt / total_Pveh) * 100 if total_Pveh > 0 else 0
-
-# Print results
-print(f"Overall Engine Power Contribution: {overall_eng_percent:.2f}%")
-print(f"Overall Battery Power Contribution: {overall_batt_percent:.2f}%")
-
-# Optionally, save the results to a file
-overall_results = pd.DataFrame({
-    'Metric': ['Engine Contribution (%)', 'Battery Contribution (%)'],
-    'Value': [overall_eng_percent, overall_batt_percent]
-})
-
-print(overall_results)
-'''
-
-
-
-
-
-
-
-
 # Time bounds
 t0 = 0
 tf = len(df_speed)  # Total time steps based on the data
