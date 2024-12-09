@@ -343,55 +343,41 @@ lambda_value = (2 * Q_batt**2 * R_batt) * summation_inverse * multiplicative_exp
 
 df_speed['lambda'] = lambda_value
 
-# Initialize lists for optimal values
-optimal_Peng_values = []
-optimal_Pbatt_values = []
+# Use already calculated Peng and Pbatt values
+df_speed['Optimal_Peng (kW)'] = df_speed['Peng (kW)']
+df_speed['Optimal_Pbatt (kW)'] = df_speed['Pbatt (kW)']
+
+# Initialize list for Hamiltonian values
 Hamiltonian_values = []
 
-# Iterate over each row in df_speed to optimize power split
+# Iterate over each row in df_speed to calculate Hamiltonian
 for idx, row in df_speed.iterrows():
     P_veh = row['P_veh (kW)']  # Power required by the vehicle
     lambda_value = row['lambda']  # Costate variable for current timestep
     a = row['a']  # Coefficient from linear regression
     b = row['b']  # Intercept from linear regression
 
-    min_Hamiltonian = float('inf')  # Initialize minimum Hamiltonian
-    best_Peng = None  # Initialize best engine power
-    best_Pbatt = None  # Initialize best battery power
+    Peng = row['Optimal_Peng (kW)']  # Precomputed engine power
+    Pbatt = row['Optimal_Pbatt (kW)']  # Precomputed battery power
 
-    # Iterate over all possible Peng values
-    for Peng in Peng_array:
-        # Calculate Pbatt
-        Pbatt = P_veh - Peng  # Battery power to balance the vehicle power demand
+    # Ensure Pbatt is within feasible range
+    if Pbatt < 0:
+        Hamiltonian_values.append(None)  # Append None for invalid values
+        continue
 
-        # Ensure Pbatt is within feasible range
-        if Pbatt < 0:
-            continue
+    # Calculate SOC_dot based on Pbatt
+    Pbatt_watts = Pbatt * 1000  # Convert to watts
+    sqrt_term = Voc**2 - 4 * R_batt * Pbatt_watts
+    if sqrt_term < 0:
+        Hamiltonian_values.append(None)  # Append None for invalid values
+        continue
+    SOC_dot = - (Voc - np.sqrt(sqrt_term)) / (2 * Q_batt * R_batt)
 
-        # Calculate SOC_dot based on Pbatt
-        Pbatt_watts = Pbatt * 1000  # Convert to watts
-        sqrt_term = Voc**2 - 4 * R_batt * Pbatt_watts
-        if sqrt_term < 0:
-            continue  # Skip invalid values
-        SOC_dot = - (Voc - np.sqrt(sqrt_term)) / (2 * Q_batt * R_batt)
+    # Calculate the Hamiltonian
+    Hamiltonian = (a * Peng + b) + (lambda_value * SOC_dot)
+    Hamiltonian_values.append(Hamiltonian)
 
-        # Calculate the Hamiltonian
-        Hamiltonian = (a * Peng + b) + (lambda_value * SOC_dot)
-
-        # Update optimal values if Hamiltonian is minimized
-        if Hamiltonian < min_Hamiltonian:
-            min_Hamiltonian = Hamiltonian
-            best_Peng = Peng
-            best_Pbatt = Pbatt
-
-    # Store optimal values
-    optimal_Peng_values.append(best_Peng)
-    optimal_Pbatt_values.append(best_Pbatt)
-    Hamiltonian_values.append(min_Hamiltonian)
-
-# Add results to DataFrame
-df_speed['Optimal_Peng (kW)'] = optimal_Peng_values
-df_speed['Optimal_Pbatt (kW)'] = optimal_Pbatt_values
+# Add Hamiltonian values to the DataFrame
 df_speed['Hamiltonian'] = Hamiltonian_values
 
 # Calculate overall power contributions
@@ -408,4 +394,4 @@ print(f"Overall Engine Contribution: {overall_eng_percent:.2f}%")
 print(f"Overall Battery Contribution: {overall_batt_percent:.2f}%")
 
 # Save results to file
-df_speed[['Optimal_Peng (kW)', 'Optimal_Pbatt (kW)', 'P_veh (kW)']].to_csv('optimized_power_split.csv', index=False)
+df_speed[['Optimal_Peng (kW)', 'Optimal_Pbatt (kW)', 'P_veh (kW)', 'Hamiltonian']].to_csv('optimized_power_split.csv', index=False)
