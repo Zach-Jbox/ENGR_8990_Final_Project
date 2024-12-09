@@ -5,7 +5,6 @@ from scipy.interpolate import RegularGridInterpolator
 from scipy.stats import linregress
 import plotly.graph_objects as go
 
-
 # Constants
 m = 2000  # kg
 Cd = 0.25  # Drag Coefficient
@@ -17,8 +16,6 @@ reff = 0.3  # m
 Voc = 201.6  # Battery open circuit voltage (V)
 Q_batt = 6.5  # Battery capacity (As)
 R_batt = 0.504  # Battery Resistance
-SOC_init = 0.8  # Initial state of charge
-SOC_min, SOC_max = 0.2, 0.8  # SOC bounds
 S = 30  # sun gear
 R = 78  # ring gear
 K = 4.113  # final drive
@@ -102,7 +99,6 @@ delta_Peng = 1 #kW
 MaxSp = np.linspace(1000, 4000, 300)  # 1 RPM step
 MaxTq = interp1d(MaxSp_pt, MaxTq_pt, kind='linear')(MaxSp)
 MaxSp_radsec = MaxSp * 2 * np.pi / 60  # Convert to rad/s
-
 
 delta_Peng = 1  # kW increment
 
@@ -218,9 +214,9 @@ for idx, Pveh in enumerate(df_speed['P_veh (kW)']):
             etag = 1 / eta if Tg * Wg >= 0 else eta
 
             # Calculate battery power (Pbatt)
-            #Pbatt = etam * Tm * Wm + etag * Tg * Wg
+            Pbatt = (etam * Tm * Wm + etag * Tg * Wg) / 1000
             P_veh = df_speed['P_veh (kW)'].iloc[idx]  # Power required by vehicle
-            Pbatt = P_veh - Peng
+            # Pbatt = P_veh - Peng
             Pbatt_array[i] = Pbatt
 
             # Calculate the error between Pveh and (Pbatt + Peng)
@@ -290,6 +286,7 @@ df_speed['Fuel Rate (g/s)'] = fuel_rate_values  # Add fuel rate values to df_spe
 # Save selected columns to CSV
 df_speed[['Peng (kW)', 'Pbatt (kW)', 'P_veh (kW)']].to_csv('specific_values.csv', index=False)
 
+'''
 # Calculate total engine power, battery power, and vehicle power
 total_Peng = df_speed['Peng (kW)'].sum()
 total_Pbatt = df_speed['Pbatt (kW)'].sum()
@@ -310,6 +307,7 @@ overall_results = pd.DataFrame({
 })
 
 print(overall_results)
+'''
 
 
 
@@ -320,7 +318,7 @@ print(overall_results)
 
 # Time bounds
 t0 = 0
-tf = 1875  # Replace with the actual final time in seconds or as per your data
+tf = len(df_speed)  # Total time steps based on the data
 dt = 1  # Step size (time interval)
 
 # Compute the summation term from t0 to (tf - dt)
@@ -345,32 +343,69 @@ lambda_value = (2 * Q_batt**2 * R_batt) * summation_inverse * multiplicative_exp
 
 df_speed['lambda'] = lambda_value
 
-Pbatt_watts = df_speed['Pbatt (kW)'] * 1000  # Convert Pbatt from kW to W
+# Initialize lists for optimal values
+optimal_Peng_values = []
+optimal_Pbatt_values = []
+Hamiltonian_values = []
 
-sqrt_term = Voc**2 - 4 * R_batt * Pbatt_watts
+# Iterate over each row in df_speed to optimize power split
+for idx, row in df_speed.iterrows():
+    P_veh = row['P_veh (kW)']  # Power required by the vehicle
+    lambda_value = row['lambda']  # Costate variable for current timestep
+    a = row['a']  # Coefficient from linear regression
+    b = row['b']  # Intercept from linear regression
 
-# Ensure the square root term is non-negative
-sqrt_term[sqrt_term < 0] = 0  # Replace negative values with 0
+    min_Hamiltonian = float('inf')  # Initialize minimum Hamiltonian
+    best_Peng = None  # Initialize best engine power
+    best_Pbatt = None  # Initialize best battery power
 
-# Calculate SOC_dot
-df_speed['SOC_dot'] = - (Voc - np.sqrt(sqrt_term)) / (2 * Q_batt * R_batt)
+    # Iterate over all possible Peng values
+    for Peng in Peng_array:
+        # Calculate Pbatt
+        Pbatt = P_veh - Peng  # Battery power to balance the vehicle power demand
 
-# Replace NaN or invalid SOC_dot values with zero
-df_speed['SOC_dot'] = df_speed['SOC_dot'].fillna(0)
+        # Ensure Pbatt is within feasible range
+        if Pbatt < 0:
+            continue
 
-# Initialize lists for storing optimal power split values and Hamiltonian values
+        # Calculate SOC_dot based on Pbatt
+        Pbatt_watts = Pbatt * 1000  # Convert to watts
+        sqrt_term = Voc**2 - 4 * R_batt * Pbatt_watts
+        if sqrt_term < 0:
+            continue  # Skip invalid values
+        SOC_dot = - (Voc - np.sqrt(sqrt_term)) / (2 * Q_batt * R_batt)
 
-# Iterate over each row in df_speed to determine the power split
-for idx in range(len(df_speed)):
-    P_veh = df_speed['P_veh (kW)'].iloc[idx]  # Power required by vehicle
-    Peng = df_speed['Peng (kW)'].iloc[idx]  # Power required by engine
-    lambda_value = df_speed['lambda'].iloc[idx]  # Costate variable at the current time step
-    a = df_speed['a'].iloc[idx]  # Coefficient from linear regression
-    b = df_speed['b'].iloc[idx]  # Intercept from linear regression
-    SOC_dot = df_speed['SOC_dot'].iloc[idx]  # SOC rate of change
+        # Calculate the Hamiltonian
+        Hamiltonian = (a * Peng + b) + (lambda_value * SOC_dot)
 
-    # Calculate Hamiltonian for the current Peng and Pbatt
-    Hamiltonian = (a * Pbatt + b) + (lambda_value * SOC_dot)
+        # Update optimal values if Hamiltonian is minimized
+        if Hamiltonian < min_Hamiltonian:
+            min_Hamiltonian = Hamiltonian
+            best_Peng = Peng
+            best_Pbatt = Pbatt
 
-# Add optimal power split and Hamiltonian values to df_speed
-df_speed['Hamiltonian'] = Hamiltonian
+    # Store optimal values
+    optimal_Peng_values.append(best_Peng)
+    optimal_Pbatt_values.append(best_Pbatt)
+    Hamiltonian_values.append(min_Hamiltonian)
+
+# Add results to DataFrame
+df_speed['Optimal_Peng (kW)'] = optimal_Peng_values
+df_speed['Optimal_Pbatt (kW)'] = optimal_Pbatt_values
+df_speed['Hamiltonian'] = Hamiltonian_values
+
+# Calculate overall power contributions
+total_Peng = df_speed['Optimal_Peng (kW)'].sum()  # Total engine power
+total_Pbatt = df_speed['Optimal_Pbatt (kW)'].sum()  # Total battery power
+total_Pveh = df_speed['P_veh (kW)'].sum()  # Total vehicle power demand
+
+# Calculate percentage contributions
+overall_eng_percent = (total_Peng / total_Pveh) * 100 if total_Pveh > 0 else 0
+overall_batt_percent = (total_Pbatt / total_Pveh) * 100 if total_Pveh > 0 else 0
+
+# Print results
+print(f"Overall Engine Contribution: {overall_eng_percent:.2f}%")
+print(f"Overall Battery Contribution: {overall_batt_percent:.2f}%")
+
+# Save results to file
+df_speed[['Optimal_Peng (kW)', 'Optimal_Pbatt (kW)', 'P_veh (kW)']].to_csv('optimized_power_split.csv', index=False)
