@@ -283,9 +283,6 @@ df_speed['Weng (rad/s)'] = Weng_values
 df_speed['Peng (kW)'] = Peng_values
 df_speed['Fuel Rate (g/s)'] = fuel_rate_values  # Add fuel rate values to df_speed
 
-# Save selected columns to CSV
-df_speed[['Peng (kW)', 'Pbatt (kW)', 'P_veh (kW)']].to_csv('specific_values.csv', index=False)
-
 '''
 # Calculate total engine power, battery power, and vehicle power
 total_Peng = df_speed['Peng (kW)'].sum()
@@ -308,14 +305,6 @@ overall_results = pd.DataFrame({
 
 print(overall_results)
 '''
-
-
-
-
-
-
-
-
 # Time bounds
 t0 = 0
 tf = len(df_speed)  # Total time steps based on the data
@@ -343,6 +332,14 @@ lambda_value = (2 * Q_batt**2 * R_batt) * summation_inverse * multiplicative_exp
 
 df_speed['lambda'] = lambda_value
 
+# Add a new column for Pbatt (kW) calculated using the Hamiltonian equation
+df_speed['Pbatt_calc (kW)'] = (1 / (4 * R_batt)) * (
+    Voc**2 - (lambda_value / (df_speed['a'] * Q_batt))**2
+) / 1000  # Convert watts to kW
+
+df_speed[['Peng (kW)', 'Pbatt_calc (kW)', 'P_veh (kW)']].to_csv('specific_values.csv', index=False)
+
+'''
 # Use already calculated Peng and Pbatt values
 df_speed['Optimal_Peng (kW)'] = df_speed['Peng (kW)']
 df_speed['Optimal_Pbatt (kW)'] = df_speed['Pbatt (kW)']
@@ -395,3 +392,4 @@ print(f"Overall Battery Contribution: {overall_batt_percent:.2f}%")
 
 # Save results to file
 df_speed[['Optimal_Peng (kW)', 'Optimal_Pbatt (kW)', 'P_veh (kW)', 'Hamiltonian']].to_csv('optimized_power_split.csv', index=False)
+'''
