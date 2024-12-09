@@ -218,7 +218,9 @@ for idx, Pveh in enumerate(df_speed['P_veh (kW)']):
             etag = 1 / eta if Tg * Wg >= 0 else eta
 
             # Calculate battery power (Pbatt)
-            Pbatt = etam * Tm * Wm + etag * Tg * Wg
+            #Pbatt = etam * Tm * Wm + etag * Tg * Wg
+            P_veh = df_speed['P_veh (kW)'].iloc[idx]  # Power required by vehicle
+            Pbatt = P_veh - Peng
             Pbatt_array[i] = Pbatt
 
             # Calculate the error between Pveh and (Pbatt + Peng)
@@ -285,6 +287,10 @@ df_speed['Weng (rad/s)'] = Weng_values
 df_speed['Peng (kW)'] = Peng_values
 df_speed['Fuel Rate (g/s)'] = fuel_rate_values  # Add fuel rate values to df_speed
 
+df_speed[['Peng (kW)', 'Pbatt (kW)', 'P_veh (kW)']].to_csv('specific_values.csv', index=False)
+
+
+
 # Time bounds
 t0 = 0
 tf = 1875  # Replace with the actual final time in seconds or as per your data
@@ -335,16 +341,12 @@ for idx in range(len(df_speed)):
     a = df_speed['a'].iloc[idx]  # Coefficient from linear regression
     b = df_speed['b'].iloc[idx]  # Intercept from linear regression
     SOC_dot = df_speed['SOC_dot'].iloc[idx]  # SOC rate of change
-    
-    Pbatt = P_veh - Peng
 
     # Calculate Hamiltonian for the current Peng and Pbatt
     Hamiltonian = (a * Pbatt + b) + (lambda_value * SOC_dot)
 
 # Add optimal power split and Hamiltonian values to df_speed
 df_speed['Hamiltonian'] = Hamiltonian
-df_speed['Pbatt (kW)'] = Pbatt
-
 
 # Save selected columns to CSV
 df_speed[['Peng (kW)', 'Pbatt (kW)', 'P_veh (kW)']].to_csv('specific_values.csv', index=False)
