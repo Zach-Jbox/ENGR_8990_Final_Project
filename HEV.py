@@ -380,30 +380,84 @@ hamiltonian.add_trace(go.Scatter(
     y=df_filtered['Hamiltonian'],
     mode='lines',
     name='Hamiltonian',
-    line=dict(width=2, color='blue')
 ))
 
 # Customize the layout
 hamiltonian.update_layout(
     title="Hamiltonian Over Time",
-    xaxis_title="Time Step",
-    yaxis_title="Hamiltonian Value",
-    template="plotly_white",
-    title_font=dict(size=20, family='Arial'),
-    xaxis=dict(tickmode='linear', showgrid=True),
-    yaxis=dict(showgrid=True, zeroline=True),
+    xaxis_title="Time (index)",
+    yaxis_title="Hamiltonian",
+    showlegend=True
 )
 
-# Save the figure as HTML (optional) and display
 hamiltonian.show()
 
 
 
+# Create the Plotly figure
+Fuel_consumption = go.Figure()
+
+# Add a line plot for the Hamiltonian values
+Fuel_consumption.add_trace(go.Scatter(
+    x=df_filtered.index,  # Assuming index represents the time steps
+    y=df_speed['Fuel Rate (g/s)'],
+    mode='lines',
+    name='Fuel Rate',
+))
+
+# Customize the layout
+Fuel_consumption.update_layout(
+    title="Fuel Rate Over Time",
+    xaxis_title="Time (index)",
+    yaxis_title="Fuel Rate (g/s)",
+    showlegend=True
+)
+
+Fuel_consumption.show()
 
 
 
+# Create the Plotly figure for Speed Over Time
+speed_over_time = go.Figure()
+
+# Add a line plot for speed values
+speed_over_time.add_trace(go.Scatter(
+    x=df_speed.index,  # Assuming index represents the time steps
+    y=df_speed['Speed (m/s)'],  # Replace with the actual column name for speed
+    mode='lines',
+    name='Speed',
+))
+
+# Customize the layout
+speed_over_time.update_layout(
+    title="Speed Over Time",
+    xaxis_title="Time (index)",
+    yaxis_title="Speed (m/s)",
+    showlegend=True
+)
+
+# Show the plot
+speed_over_time.show()
 
 
+
+fig_soc = go.Figure()
+
+fig_soc.add_trace(go.Scatter(
+    x=df_speed.index,  # Assuming time is represented by the index
+    y=df_speed['SOC_dot'],
+    mode='lines',
+    name='SOC Dot'
+))
+
+fig_soc.update_layout(
+    title="SOC Over Time",
+    xaxis_title="Time (index)",
+    yaxis_title="SOC",
+    showlegend=True
+)
+
+fig_soc.show()
 
 
 
@@ -442,6 +496,9 @@ fig_torques.update_layout(
 
 # Show the torque plot
 fig_torques.show()
+
+
+
 
 # Plot for Speeds
 fig_speeds = go.Figure()
