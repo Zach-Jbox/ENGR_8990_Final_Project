@@ -352,19 +352,6 @@ df_speed['Hamiltonian'] = Hamiltonian_values
 df_speed['SOC_dot'] = SOC_dot_values
 df_speed['Pbatt_actual (kW)'] = Pbatt_actual_values
 
-# Calculate overall power contributions
-total_Peng = df_speed['Peng (kW)'].sum()  # Total engine power
-total_Pbatt = df_speed['Pbatt_actual (kW)'].sum()  # Total battery power
-total_Pveh = df_speed['P_veh (kW)'].sum()  # Total vehicle power demand
-
-# Calculate percentage contributions
-overall_eng_percent = (total_Peng / total_Pveh) * 100 if total_Pveh > 0 else 0
-overall_batt_percent = (total_Pbatt / total_Pveh) * 100
-
-# Print results
-print(f"Overall Engine Contribution: {overall_eng_percent:.2f}%")
-print(f"Overall Battery Contribution: {overall_batt_percent:.2f}%")
-
 # Save results to file
 df_speed[['Hamiltonian']].to_csv('optimized_power_split.csv', index=False)
 
