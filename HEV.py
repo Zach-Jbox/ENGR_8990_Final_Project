@@ -190,6 +190,7 @@ fuel_rate_values = []  # List to store fuel rate in g/s
 for idx, Pveh in enumerate(df_speed['P_veh (kW)']):
     # Proceed with calculations for each Pveh
     Pbatt_array = np.zeros(np.shape(Peng_array))
+    fuel_rate_array = np.zeros(np.shape(Peng_array))
     best_Tg, best_Tm, best_Wg, best_Wm, best_Pbatt, best_Teng, best_Weng, best_Peng, best_fuel_rate = None, None, None, None, None, None, None, None, None
     min_error = float('inf')  # Track minimum error between Pveh and (Pbatt + Peng)
 
@@ -214,32 +215,32 @@ for idx, Pveh in enumerate(df_speed['P_veh (kW)']):
 
             # Calculate battery power (Pbatt)
             Pbatt = (etam * Tm * Wm + etag * Tg * Wg) / 1000
-            #Pbatt = Pveh - Peng
             Pbatt_array[i] = Pbatt
 
             # Calculate the error between Pveh and (Pbatt + Peng)
             total_power = Pbatt + Peng
             error = abs(Pveh - total_power)
 
+            # Calculate the fuel rate (g/s) using fine_fuel_map
+            fuel_rate = None
+            if Teng is not None and Weng is not None:
+                torque_idx = np.abs(fine_trq - Teng).argmin()
+                speed_idx = np.abs(fine_spd - Weng).argmin()
+                fuel_consumption_gpkWh = fine_fuel_map[speed_idx, torque_idx]
+                fuel_rate = (fuel_consumption_gpkWh * Peng * 1000) / 3600
+                fuel_rate_array[i] = fuel_rate
+
             # Update the best values if this combination yields a smaller error
             if error < min_error:
                 min_error = error
                 best_Tg, best_Tm, best_Wg, best_Wm, best_Pbatt, best_Teng, best_Weng, best_Peng = Tg, Tm, Wg, Wm, Pbatt, Teng, Weng, Peng
-
-                # Calculate the fuel rate (g/s) using fine_fuel_map
-                fuel_rate = None
-                if best_Teng is not None and best_Weng is not None:
-                    # Find the closest indices for best_Teng and best_Weng in the fine grid
-                    torque_idx = np.abs(fine_trq - best_Teng).argmin()
-                    speed_idx = np.abs(fine_spd - best_Weng).argmin()
-
-                    # Extract the fuel rate from fine_fuel_map
-                    fuel_consumption_gpkWh = fine_fuel_map[speed_idx, torque_idx]
-
-                    # Calculate fuel rate in g/s
-                    fuel_rate = (fuel_consumption_gpkWh * Peng * 1000) / 3600
-
                 best_fuel_rate = fuel_rate
+
+    # Perform linear regression if valid points exist
+    if not np.isnan(Pbatt_array).any() and len(min_fuel_rates) > 0:
+        slope, intercept, _, _, _ = linregress(Pbatt_array, min_fuel_rates)
+        a_values.append(slope)
+        b_values.append(intercept)
 
     # Append the final calculated values for this Pveh
     Tg_values.append(best_Tg)
@@ -253,8 +254,6 @@ for idx, Pveh in enumerate(df_speed['P_veh (kW)']):
     fuel_rate_values.append(best_fuel_rate)
 
 # Convert results to numpy arrays
-a_values = np.array(a_values).reshape(-1)
-b_values = np.array(b_values).reshape(-1)
 Tg_values = np.array(Tg_values).reshape(-1)
 Tm_values = np.array(Tm_values).reshape(-1)
 Wg_values = np.array(Wg_values).reshape(-1)
@@ -264,6 +263,8 @@ Teng_values = np.array(Teng_values).reshape(-1)
 Weng_values = np.array(Weng_values).reshape(-1)
 Peng_values = np.array(Peng_values).reshape(-1)  # Convert Peng values to numpy array
 fuel_rate_values = np.array(fuel_rate_values).reshape(-1)
+a_values = np.array(a_values).reshape(-1)
+b_values = np.array(b_values).reshape(-1)
 
 # Add to df_speed
 df_speed['Tg (Nm)'] = Tg_values
@@ -274,57 +275,10 @@ df_speed['Pbatt (kW)'] = Pbatt_values
 df_speed['Teng (Nm)'] = Teng_values
 df_speed['Weng (rad/s)'] = Weng_values
 df_speed['Peng (kW)'] = Peng_values
-df_speed['Fuel Rate (g/s)'] = fuel_rate_values  # Add corrected fuel rate values to df_speed
+df_speed['Fuel Rate (g/s)'] = fuel_rate_values
+df_speed['a'] = a_values
+df_speed['b'] = b_values
 
-df_speed[['Peng (kW)', 'Pbatt (kW)', 'Fuel Rate (g/s)']].to_csv('specific_values.csv', index=False)
-
-
-# Calculate total engine power, battery power, and vehicle power
-total_Peng = df_speed['Peng (kW)'].sum()
-total_Pbatt = df_speed['Pbatt (kW)'].sum()
-total_Pveh = df_speed['P_veh (kW)'].sum()
-
-# Calculate overall percentage contributions
-overall_eng_percent = (total_Peng / total_Pveh) * 100 if total_Pveh > 0 else 0
-overall_batt_percent = (total_Pbatt / total_Pveh) * 100 if total_Pveh > 0 else 0
-
-# Print results
-print(f"Overall Engine Power Contribution: {overall_eng_percent:.2f}%")
-print(f"Overall Battery Power Contribution: {overall_batt_percent:.2f}%")
-
-# Optionally, save the results to a file
-overall_results = pd.DataFrame({
-    'Metric': ['Engine Contribution (%)', 'Battery Contribution (%)'],
-    'Value': [overall_eng_percent, overall_batt_percent]
-})
-
-print(overall_results)
-
-
-
-# Create the plot for Fuel Rate vs. Pbatt
-fig = go.Figure()
-
-fig.add_trace(go.Scatter(
-    x=df_speed['Pbatt (kW)'],  # Battery power
-    y=df_speed['Fuel Rate (g/s)'],  # Fuel rate
-    mode='markers',
-    name='Fuel Rate vs Pbatt'
-))
-
-# Add titles and labels
-fig.update_layout(
-    title="Fuel Rate vs. Battery Power",
-    xaxis_title="Battery Power (Pbatt in kW)",
-    yaxis_title="Fuel Rate (g/s)",
-    showlegend=True
-)
-
-# Show the plot
-fig.show()
-
-
-'''
 # Time bounds
 t0 = 0
 tf = len(df_speed)  # Total time steps based on the data
@@ -352,54 +306,55 @@ lambda_value = (2 * Q_batt**2 * R_batt) * summation_inverse * multiplicative_exp
 
 df_speed['lambda'] = lambda_value
 
-# Add a new column for Pbatt (kW) calculated using the Hamiltonian equation
-df_speed['Pbatt_calc (kW)'] = (1 / (4 * R_batt)) * (
-    Voc**2 - (lambda_value / (df_speed['a'] * Q_batt))**2
-) / 1000  # Convert watts to kW
+df_speed[['Peng (kW)', 'Pbatt (kW)', 'lambda']].to_csv('specific_values.csv', index=False)
 
-df_speed[['Peng (kW)', 'Pbatt_calc (kW)', 'P_veh (kW)']].to_csv('specific_values.csv', index=False)
-
-
-# Use already calculated Peng and Pbatt values
-df_speed['Optimal_Peng (kW)'] = df_speed['Peng (kW)']
-df_speed['Optimal_Pbatt (kW)'] = df_speed['Pbatt (kW)']
-
-# Initialize list for Hamiltonian values
+# Initialize lists for recalculated Hamiltonian values, SOC_dot, and Pbatt_actual
 Hamiltonian_values = []
+SOC_dot_values = []
+Pbatt_actual_values = []
 
-# Iterate over each row in df_speed to calculate Hamiltonian
+# Iterate over each row in df_speed
 for idx, row in df_speed.iterrows():
-    P_veh = row['P_veh (kW)']  # Power required by the vehicle
-    lambda_value = row['lambda']  # Costate variable for current timestep
-    a = row['a']  # Coefficient from linear regression
-    b = row['b']  # Intercept from linear regression
+    try:
+        # Extract required values
+        P_veh = row['P_veh (kW)']  # Power required by the vehicle
+        Peng = row['Peng (kW)']  # Engine power
+        lambda_value = row['lambda']  # Costate variable
+        m_fuel = row['Fuel Rate (g/s)']  # Fuel rate in g/s
 
-    Peng = row['Optimal_Peng (kW)']  # Precomputed engine power
-    Pbatt = row['Optimal_Pbatt (kW)']  # Precomputed battery power
+        # Recalculate Pbatt (allowing negative values)
+        Pbatt_actual = P_veh - Peng
+        Pbatt_actual_values.append(Pbatt_actual)
 
-    # Ensure Pbatt is within feasible range
-    if Pbatt < 0:
-        Hamiltonian_values.append(None)  # Append None for invalid values
-        continue
+        # Compute SOC_dot
+        Pbatt_watts = Pbatt_actual * 1000  # Convert to watts
+        sqrt_term = Voc**2 - 4 * R_batt * Pbatt_watts
+        if sqrt_term < 0:
+            sqrt_term = 0  # Handle cases where sqrt_term is negative
+        SOC_dot = - (Voc - np.sqrt(sqrt_term)) / (2 * Q_batt * R_batt)
 
-    # Calculate SOC_dot based on Pbatt
-    Pbatt_watts = Pbatt * 1000  # Convert to watts
-    sqrt_term = Voc**2 - 4 * R_batt * Pbatt_watts
-    if sqrt_term < 0:
-        Hamiltonian_values.append(None)  # Append None for invalid values
-        continue
-    SOC_dot = - (Voc - np.sqrt(sqrt_term)) / (2 * Q_batt * R_batt)
+        # Save SOC_dot value
+        SOC_dot_values.append(SOC_dot)
 
-    # Calculate the Hamiltonian
-    Hamiltonian = min+ (lambda_value * SOC_dot)
-    Hamiltonian_values.append(Hamiltonian)
+        # Calculate the Hamiltonian using the updated formula
+        Hamiltonian = (m_fuel * Pbatt_actual) + (lambda_value * SOC_dot)
+        Hamiltonian_values.append(Hamiltonian)
 
-# Add Hamiltonian values to the DataFrame
+    except Exception as e:
+        # Handle unexpected errors
+        Pbatt_actual_values.append(None)
+        SOC_dot_values.append(None)
+        Hamiltonian_values.append(None)
+        print(f"Error at index {idx}: {e}")
+
+# Add recalculated Hamiltonian, SOC_dot, and Pbatt_actual values to the DataFrame
 df_speed['Hamiltonian'] = Hamiltonian_values
+df_speed['SOC_dot'] = SOC_dot_values
+df_speed['Pbatt_actual (kW)'] = Pbatt_actual_values
 
 # Calculate overall power contributions
-total_Peng = df_speed['Optimal_Peng (kW)'].sum()  # Total engine power
-total_Pbatt = df_speed['Optimal_Pbatt (kW)'].sum()  # Total battery power
+total_Peng = df_speed['Peng (kW)'].sum()  # Total engine power
+total_Pbatt = df_speed['Pbatt_actual (kW)'].sum()  # Total battery power
 total_Pveh = df_speed['P_veh (kW)'].sum()  # Total vehicle power demand
 
 # Calculate percentage contributions
@@ -411,5 +366,114 @@ print(f"Overall Engine Contribution: {overall_eng_percent:.2f}%")
 print(f"Overall Battery Contribution: {overall_batt_percent:.2f}%")
 
 # Save results to file
-df_speed[['Optimal_Peng (kW)', 'Optimal_Pbatt (kW)', 'P_veh (kW)', 'Hamiltonian']].to_csv('optimized_power_split.csv', index=False)
-'''
+df_speed[['Hamiltonian']].to_csv('optimized_power_split.csv', index=False)
+
+# Filter out rows with invalid or NaN Hamiltonian values
+df_filtered = df_speed.dropna(subset=['Hamiltonian'])
+
+# Create the Plotly figure
+hamiltonian = go.Figure()
+
+# Add a line plot for the Hamiltonian values
+hamiltonian.add_trace(go.Scatter(
+    x=df_filtered.index,  # Assuming index represents the time steps
+    y=df_filtered['Hamiltonian'],
+    mode='lines',
+    name='Hamiltonian',
+    line=dict(width=2, color='blue')
+))
+
+# Customize the layout
+hamiltonian.update_layout(
+    title="Hamiltonian Over Time",
+    xaxis_title="Time Step",
+    yaxis_title="Hamiltonian Value",
+    template="plotly_white",
+    title_font=dict(size=20, family='Arial'),
+    xaxis=dict(tickmode='linear', showgrid=True),
+    yaxis=dict(showgrid=True, zeroline=True),
+)
+
+# Save the figure as HTML (optional) and display
+hamiltonian.show()
+
+
+
+
+
+
+
+
+
+
+
+
+# Plot for Torques
+fig_torques = go.Figure()
+
+fig_torques.add_trace(go.Scatter(
+    x=df_speed.index,  # Assuming time is represented by the index
+    y=df_speed['Tg (Nm)'],
+    mode='lines',
+    name='Generator Torque (Tg)'
+))
+
+fig_torques.add_trace(go.Scatter(
+    x=df_speed.index,
+    y=df_speed['Tm (Nm)'],
+    mode='lines',
+    name='Motor Torque (Tm)'
+))
+
+fig_torques.add_trace(go.Scatter(
+    x=df_speed.index,
+    y=df_speed['Teng (Nm)'],
+    mode='lines',
+    name='Engine Torque (Teng)'
+))
+
+fig_torques.update_layout(
+    title="Torques Over Time",
+    xaxis_title="Time (index)",
+    yaxis_title="Torque (Nm)",
+    legend_title="Torque Type",
+    showlegend=True
+)
+
+# Show the torque plot
+fig_torques.show()
+
+# Plot for Speeds
+fig_speeds = go.Figure()
+
+fig_speeds.add_trace(go.Scatter(
+    x=df_speed.index,
+    y=df_speed['Wg (rad/s)'],
+    mode='lines',
+    name='Generator Speed (Wg)'
+))
+
+fig_speeds.add_trace(go.Scatter(
+    x=df_speed.index,
+    y=df_speed['Wm (rad/s)'],
+    mode='lines',
+    name='Motor Speed (Wm)'
+))
+
+fig_speeds.add_trace(go.Scatter(
+    x=df_speed.index,
+    y=df_speed['Weng (rad/s)'],
+    mode='lines',
+    name='Engine Speed (Weng)'
+))
+
+fig_speeds.update_layout(
+    title="Speeds Over Time",
+    xaxis_title="Time (index)",
+    yaxis_title="Speed (rad/s)",
+    legend_title="Speed Type",
+    showlegend=True
+)
+
+# Show the speed plot
+fig_speeds.show()
