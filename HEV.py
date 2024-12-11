@@ -39,8 +39,7 @@ df_speed['F_inertia (N)'] = m * df_speed['Acceleration (m/s^2)']
 
 # Calculate forces
 X = df_speed['F_aero (N)'] + df_speed["F_grade (N)"] + df_speed["F_roll (N)"] + df_speed["F_inertia (N)"]
-df_speed['Fthrust (N)'] = X #np.maximum(X, 0)
-#df_speed['Fbrake (N)'] = np.minimum(X, 0)
+df_speed['Fthrust (N)'] = X
 
 # Calculate power required by the vehicle (P_veh) in kilo Watts
 df_speed['P_veh (W)'] = (df_speed['Fthrust (N)'] * df_speed['Speed (m/s)'])
@@ -417,6 +416,38 @@ df_actual[['Hamiltonian']].to_csv('optimized_power_split.csv', index=False)
 # Filter out rows with invalid or NaN Hamiltonian values
 df_filtered = df_actual.dropna(subset=['Hamiltonian'])
 
+# Total fuel consumption for PMP (already calculated)
+total_fuel_pmp = df_actual['Fuel_actual'].sum()  # Sum of fuel consumption in grams
+
+# Calculate fuel consumption for the 50/50 split
+fuel_5050 = []
+for Pveh in df_speed['P_veh (W)']:
+    Peng_5050 = Pveh / 2  # Hypothetical engine power (50% of vehicle power)
+    if Peng_5050 > 0:
+        try:
+            # Match torque and speed to achieve Peng_5050 using realistic values
+            closest_row = df_results.iloc[(df_results['Peng (kW)'] - Peng_5050 / 1000).abs().argsort()[:1]]
+            Teng_5050 = closest_row['Best Te (Nm)'].values[0]
+            Weng_5050 = closest_row['Best We (rad/s)'].values[0]
+            fuel_5050.append(interp_func((Weng_5050, Teng_5050)).item() * Peng_5050 / 3600)  # g/s to g
+        except Exception as e:
+            fuel_5050.append(0)
+    else:
+        fuel_5050.append(0)
+
+# Total fuel consumption for 50/50 split
+total_fuel_5050 = np.sum(fuel_5050)
+
+# Calculate the percentage difference
+fuel_difference_percentage = ((total_fuel_5050 - total_fuel_pmp) / total_fuel_5050) * 100
+
+# Output the results
+print(f"Total Fuel Consumption (PMP): {total_fuel_pmp:.2f} g")
+print(f"Total Fuel Consumption (50/50 Split): {total_fuel_5050:.2f} g")
+print(f"Fuel Savings with PMP: {fuel_difference_percentage:.2f}%")
+
+
+
 # Create the Plotly figure
 hamiltonian = go.Figure()
 
@@ -439,54 +470,6 @@ hamiltonian.update_layout(
 hamiltonian.show()
 
 
-
-# Create the Plotly figure
-Fuel_consumption = go.Figure()
-
-# Add a line plot for the Hamiltonian values
-Fuel_consumption.add_trace(go.Scatter(
-    x=df_filtered.index,  # Assuming index represents the time steps
-    y=df_actual['Fuel_actual'],
-    mode='lines',
-    name='Fuel Rate',
-))
-
-# Customize the layout
-Fuel_consumption.update_layout(
-    title="Fuel Rate Over Time",
-    xaxis_title="Time (index)",
-    yaxis_title="Fuel Rate (g/s)",
-    showlegend=True
-)
-
-Fuel_consumption.show()
-
-
-
-# Create the Plotly figure for Speed Over Time
-speed_over_time = go.Figure()
-
-# Add a line plot for speed values
-speed_over_time.add_trace(go.Scatter(
-    x=df_speed.index,  # Assuming index represents the time steps
-    y=df_speed['Speed (m/s)'],  # Replace with the actual column name for speed
-    mode='lines',
-    name='Speed',
-))
-
-# Customize the layout
-speed_over_time.update_layout(
-    title="Speed Over Time",
-    xaxis_title="Time (index)",
-    yaxis_title="Speed (m/s)",
-    showlegend=True
-)
-
-# Show the plot
-speed_over_time.show()
-
-
-
 fig_soc = go.Figure()
 
 fig_soc.add_trace(go.Scatter(
@@ -504,9 +487,6 @@ fig_soc.update_layout(
 )
 
 fig_soc.show()
-
-
-
 
 # Plot for Torques
 fig_torques = go.Figure()
@@ -543,9 +523,6 @@ fig_torques.update_layout(
 # Show the torque plot
 fig_torques.show()
 
-
-
-
 # Plot for Speeds
 fig_speeds = go.Figure()
 
@@ -581,3 +558,130 @@ fig_speeds.update_layout(
 # Show the speed plot
 fig_speeds.show()
 
+
+
+# Data for the bar chart
+strategies = ['PMP', '50/50 Split']
+fuel_consumptions = [total_fuel_pmp, total_fuel_5050]  # Replace with your values
+
+# Create the bar chart with custom colors and opacity
+fuel_comparison_plot = go.Figure([go.Bar(
+    x=strategies,
+    y=fuel_consumptions,
+    text=fuel_consumptions,
+    textposition='auto',
+    marker=dict(
+        color=['blue', 'red']  # Assign different colors to each bar
+    ),
+    opacity=0.7  # Set opacity to 0.7
+)])
+
+# Customize layout
+fuel_comparison_plot.update_layout(
+    title="Fuel Consumption Comparison",
+    xaxis_title="Strategy",
+    yaxis_title="Total Fuel Consumption (g)",
+    showlegend=False
+)
+
+fuel_comparison_plot.show()
+
+
+
+# Create the stacked area plot
+power_split_plot = go.Figure()
+
+power_split_plot.add_trace(go.Scatter(
+    x=df_speed.index,
+    y=df_actual['Peng_actual'],
+    mode='lines',
+    name='Engine Power (Peng_actual)',
+    stackgroup='one'  # Enable stacking
+))
+
+power_split_plot.add_trace(go.Scatter(
+    x=df_speed.index,
+    y=df_actual['Pbatt_actual'],
+    mode='lines',
+    name='Battery Power (Pbatt_actual)',
+    stackgroup='one'
+))
+
+# Customize layout
+power_split_plot.update_layout(
+    title="Power Split Over Time",
+    xaxis_title="Time Step",
+    yaxis_title="Power (W)",
+    showlegend=True
+)
+
+power_split_plot.show()
+
+
+
+
+# Prepare the data for plotting
+data = pd.DataFrame({
+    'Pbatt_actual': df_actual['Pbatt_actual'],
+    'Fuel_actual': df_actual['Fuel_actual']
+})
+
+# Add a trendline using numpy's polyfit
+coefficients = np.polyfit(data['Pbatt_actual'], data['Fuel_actual'], deg=1)  # Linear trendline
+trendline = np.poly1d(coefficients)
+
+# Add trendline data to the DataFrame
+data['Trendline'] = trendline(data['Pbatt_actual'])
+
+# Create the scatter plot
+Fuel_Consumption_Vs_Power_Distribution = go.Figure()
+
+# Add the scatter plot of actual data points
+Fuel_Consumption_Vs_Power_Distribution.add_trace(go.Scatter(
+    x=data['Pbatt_actual'],
+    y=data['Fuel_actual'],
+    mode='markers',
+    name='Fuel vs. Battery Power'
+))
+
+# Add the trendline to the plot
+Fuel_Consumption_Vs_Power_Distribution.add_trace(go.Scatter(
+    x=data['Pbatt_actual'],
+    y=data['Trendline'],
+    mode='lines',
+    name='Trendline',
+    line=dict(color='red', dash='dash')
+))
+
+# Customize the layout
+Fuel_Consumption_Vs_Power_Distribution.update_layout(
+    title="Fuel Consumption vs. Battery Power",
+    xaxis_title="Battery Power (W)",
+    yaxis_title="Fuel Consumption (g)",
+    showlegend=True
+)
+
+# Show the plot
+Fuel_Consumption_Vs_Power_Distribution.show()
+
+
+# Data for the pie chart
+labels = ['Battery Power Contribution', 'Engine Power Contribution']
+values = [battery_percentage, engine_percentage]  # Use calculated percentages
+
+# Create the pie chart
+power_contribution_pie = go.Figure(data=[go.Pie(
+    labels=labels,
+    values=values,
+    textinfo='label+percent',
+    marker=dict(colors=['blue', 'red']),  # Blue for battery, red for engine
+    opacity=0.7  # Set opacity to 0.7
+)])
+
+# Customize layout
+power_contribution_pie.update_layout(
+    title="Power Contribution Distribution"
+)
+
+# Show the plot
+power_contribution_pie.show()
